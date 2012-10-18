@@ -47,6 +47,10 @@ def applications_page_check(request, current_page=None, path=None):
 class AppRegexURLResolver(RegexURLResolver):
     page_id = None
     url_patterns = None
+
+    def __init__(self, site, *args, **kwargs):
+        self.site = site
+        super(AppRegexURLResolver, self).__init__(*args, **kwargs)
     
     def resolve_page_id(self, path):
         """Resolves requested path similar way how resolve does, but instead
@@ -69,8 +73,14 @@ class AppRegexURLResolver(RegexURLResolver):
                     if sub_match:
                         return pattern.page_id
                     tried.append(pattern.regex.pattern)
-            raise Resolver404, {'tried': tried, 'path': new_path}        
+            raise Resolver404, {'tried': tried, 'path': new_path}
 
+    def resolve(self, path):
+        current_site = Site.objects.get_current()
+        if self.site != current_site:
+            raise Resolver404({'path': path})
+        return super(AppRegexURLResolver, self).resolve(path)
+            
 
 def recurse_patterns(path, pattern_list, page_id):
     """
@@ -151,10 +161,6 @@ def get_app_patterns():
     the title path and then included into the cms url patterns.
     """
     from cms.models import Title
-    try:
-        current_site = Site.objects.get_current()
-    except Site.DoesNotExist:
-        current_site = None
     included = []
     
     # we don't have a request here so get_page_queryset() can't be used,
@@ -163,18 +169,18 @@ def get_app_patterns():
     # in frontend
     is_draft = not settings.CMS_MODERATOR
 
-    title_qs = Title.objects.filter(page__publisher_is_draft=is_draft, page__site=current_site)
-    
+    title_qs = Title.objects.filter(page__publisher_is_draft=is_draft)
+
+    hooked_applications = {}
     if 'cms.middleware.multilingual.MultilingualURLMiddleware' in settings.MIDDLEWARE_CLASSES:
         use_namespaces = True
-        hooked_applications = {}
     else:
         use_namespaces = False
-        hooked_applications = []
     
     # Loop over all titles with an application hooked to them
     for title in title_qs.exclude(application_urls=None).exclude(application_urls='').select_related():
         path = title.path
+        site = title.page.site
         if use_namespaces:
             mixid = "%s:%s:%s" % (path + "/", title.application_urls, title.language)
         else:
@@ -185,25 +191,27 @@ def get_app_patterns():
         if not settings.APPEND_SLASH:
             path += '/'
         if use_namespaces:
-            if title.language not in hooked_applications:
-                hooked_applications[title.language] = []
-            hooked_applications[title.language] += get_patterns_for_title(path, title)
+            hooked_applications.setdefault(title.language, {}).\
+                setdefault(site, []).extend(get_patterns_for_title(path, title))
         else:
-            hooked_applications += get_patterns_for_title(path, title)
+            hooked_applications.setdefault(site, []).extend(
+                get_patterns_for_title(path, title))
         included.append(mixid)
     # Build the app patterns to be included in the cms urlconfs
     app_patterns = []
     if use_namespaces:
-        for ns, currentpatterns in hooked_applications.items():
+        for ns, patterns_by_site in hooked_applications.items():
+            for site, currentpatterns in patterns_by_site.items():
+                extra_patterns = patterns('', *currentpatterns)
+                resolver = AppRegexURLResolver(site, r'', 'app_resolver', namespace=ns)
+                resolver.url_patterns = extra_patterns
+                app_patterns.append(resolver)
+                APP_RESOLVERS.append(resolver)
+    else:
+        for site, currentpatterns in hooked_applications:
             extra_patterns = patterns('', *currentpatterns)
-            resolver = AppRegexURLResolver(r'', 'app_resolver', namespace=ns)
+            resolver = AppRegexURLResolver(site, r'', 'app_resolver')
             resolver.url_patterns = extra_patterns
             app_patterns.append(resolver)
             APP_RESOLVERS.append(resolver)
-    else:
-        extra_patterns = patterns('', *hooked_applications)
-        resolver = AppRegexURLResolver(r'', 'app_resolver')
-        resolver.url_patterns = extra_patterns
-        app_patterns.append(resolver)
-        APP_RESOLVERS.append(resolver)
     return app_patterns
