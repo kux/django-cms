@@ -11,7 +11,7 @@ from cms.plugins.text.models import Text
 from cms.sitemaps import CMSSitemap
 from cms.templatetags.cms_tags import get_placeholder_content
 from cms.test_utils.testcases import (CMSTestCase, URL_CMS_PAGE,
-                                      URL_CMS_PAGE_ADD)
+                                      URL_CMS_PAGE_ADD, TestHelper)
 from cms.test_utils.util.context_managers import (LanguageOverride,
                                                   SettingsOverride)
 from cms.utils.page_resolver import get_page_from_request
@@ -21,14 +21,88 @@ from cms.test_utils.util.context_managers import (LanguageOverride,
     SettingsOverride)
 from cms.utils.page_resolver import get_page_from_request, is_valid_url
 from cms.utils import timezone
+from django.db import transaction
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.core.urlresolvers import reverse
 from django.http import HttpRequest, HttpResponse, HttpResponseNotFound
+from django.test import testcases
 import datetime
 import os.path
+import threading
+import Queue
 from cms.utils.page import is_valid_page_slug
+
+
+class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
+
+    def _add_page(self):
+        page_data = self.get_new_page_data()
+        return self.client.post(URL_CMS_PAGE_ADD, page_data)
+
+    def _add_pages(self, num_pages):
+        for _ in xrange(num_pages):
+            self._add_page()
+
+    def test_concurrently_create_pages(self):
+        status_codes = Queue.Queue()
+
+        class PageCreatingThread(threading.Thread):
+            def run(self_):
+                response = self._add_page()
+                status_codes.put(response.status_code)
+
+        superuser = self.get_superuser()
+        num_concurrent_req = 5
+        threads = []
+        with self.login_user_context(superuser):
+            self._add_page()
+            for _ in xrange(num_concurrent_req):
+                new_thread = PageCreatingThread()
+                new_thread.start()
+                threads.append(new_thread)
+            for thread in threads:
+                thread.join()
+            # check that all page adds were successful and returned with a redirect
+            while not status_codes.empty():
+                self.assertEquals(status_codes.get(), 302)
+            # commit any pending transaction so we make sure we see an up to date state of the db
+            transaction.commit()
+            # all previous created pages need to have different tree_ids
+            self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), num_concurrent_req + 1)
+    
+    def _concurrently_move_pages(self, movements):
+        status_codes = Queue.Queue()
+
+        class PageMove(threading.Thread):
+            def run(self_):
+                response = self.client.post("/admin/cms/page/%s/move-page/" % page_id, {"target": target_id, "position": position})
+                status_codes.put(response.status_code)
+
+        threads = []
+        for page_id, target_id, position in movements:
+            page_moving_thread = PageMove()
+            page_moving_thread.start()
+            threads.append(page_moving_thread)
+        for thread in threads:
+            thread.join()
+        # check that all page moves were successful
+        while not status_codes.empty():
+            self.assertEquals(status_codes.get(), 200)
+
+    def test_concurrently_move_pages(self):
+        superuser = self.get_superuser()
+        with self.login_user_context(superuser):
+            page_count = 10
+            self._add_pages(page_count)
+            transaction.commit()
+            self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), page_count)
+            movements = [(page_id, 10, 'left') for page_id in xrange(1, 5)]
+            self._concurrently_move_pages(movements)
+            # commit any pending transaction so we make sure we see an up to date state of the db
+            transaction.commit()
+            self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), page_count)
 
 
 class PagesTestCase(CMSTestCase):

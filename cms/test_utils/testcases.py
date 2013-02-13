@@ -65,22 +65,41 @@ def _collectWarnings(observeWarning, f, *args, **kwargs):
         warnings.showwarning = origShow
     return result
 
-
-class CMSTestCase(testcases.TestCase):
+class TestHelper(object):
     counter = 1
 
-    def _fixture_setup(self):
-        super(CMSTestCase, self)._fixture_setup()
-        self.create_fixtures()
-        self.client = Client()
+    def get_new_page_data(self, parent_id=''):
+        page_data = {
+            'title': 'test page %d' % self.counter,
+            'slug': 'test-page-%d' % self.counter,
+            'language': settings.LANGUAGES[0][0],
+            'template': 'nav_playground.html',
+            'parent': parent_id,
+            'site': 1,
+        }
+        # required only if user haves can_change_permission
+        page_data['pagepermission_set-TOTAL_FORMS'] = 0
+        page_data['pagepermission_set-INITIAL_FORMS'] = 0
+        page_data['pagepermission_set-MAX_NUM_FORMS'] = 0
+        page_data['pagepermission_set-2-TOTAL_FORMS'] = 0
+        page_data['pagepermission_set-2-INITIAL_FORMS'] = 0
+        page_data['pagepermission_set-2-MAX_NUM_FORMS'] = 0
+        self.counter = self.counter + 1
+        return page_data
 
-    def create_fixtures(self):
-        pass
-
-    def _post_teardown(self):
-        # Needed to clean the menu keys cache, see menu.menu_pool.clear()
-        menu_pool.clear()
-        super(CMSTestCase, self)._post_teardown()
+    def get_new_page_data_dbfields(self, parent=None, site=None,
+                                   language=None,
+                                   template='nav_playground.html',):
+        page_data = {
+            'title': 'test page %d' % self.counter,
+            'slug': 'test-page-%d' % self.counter,
+            'language': settings.LANGUAGES[0][0] if not language else language,
+            'template': template,
+            'parent': parent if parent else None,
+            'site': site if site else Site.objects.get_current(),
+        }
+        self.counter = self.counter + 1
+        return page_data
 
     def login_user_context(self, user):
         return UserLoginContext(self, user)
@@ -103,39 +122,22 @@ class CMSTestCase(testcases.TestCase):
         staff.save()
         return staff
     
-    def get_new_page_data(self, parent_id=''):
-        page_data = {
-            'title': 'test page %d' % self.counter,
-            'slug': 'test-page-%d' % self.counter,
-            'language': settings.LANGUAGES[0][0],
-            'template': 'nav_playground.html',
-            'parent': parent_id,
-            'site': 1,
-        }
-        # required only if user haves can_change_permission
-        page_data['pagepermission_set-TOTAL_FORMS'] = 0
-        page_data['pagepermission_set-INITIAL_FORMS'] = 0
-        page_data['pagepermission_set-MAX_NUM_FORMS'] = 0
-        page_data['pagepermission_set-2-TOTAL_FORMS'] = 0
-        page_data['pagepermission_set-2-INITIAL_FORMS'] = 0
-        page_data['pagepermission_set-2-MAX_NUM_FORMS'] = 0
-        self.counter = self.counter + 1
-        return page_data
-    
-    def get_new_page_data_dbfields(self, parent=None, site=None,
-                                   language=None,
-                                   template='nav_playground.html',):
-        page_data = {
-            'title': 'test page %d' % self.counter,
-            'slug': 'test-page-%d' % self.counter,
-            'language': settings.LANGUAGES[0][0] if not language else language,
-            'template': template,
-            'parent': parent if parent else None,
-            'site': site if site else Site.objects.get_current(),
-        }
-        self.counter = self.counter + 1
-        return page_data
-    
+
+class CMSTestCase(testcases.TestCase, TestHelper):
+
+    def _fixture_setup(self):
+        super(CMSTestCase, self)._fixture_setup()
+        self.create_fixtures()
+        self.client = Client()
+
+    def create_fixtures(self):
+        pass
+
+    def _post_teardown(self):
+        # Needed to clean the menu keys cache, see menu.menu_pool.clear()
+        menu_pool.clear()
+        super(CMSTestCase, self)._post_teardown()
+
     def get_pagedata_from_dbfields(self, page_data):
         """Converts data created by get_new_page_data_dbfields to data
         created from get_new_page_data so you can switch between test cases

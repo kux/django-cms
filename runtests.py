@@ -11,7 +11,7 @@ import warnings
 def main(test_runner='cms.test_utils.runners.NormalTestRunner', junit_output_dir='.',
          time_tests=False, verbosity=1, failfast=False, test_labels=None):
     if not test_labels:
-        test_labels = ['cms']
+        test_labels = ['cms.ConcurrentPageChangesTestCase']
     with temp_dir() as STATIC_ROOT:
         with temp_dir() as MEDIA_ROOT:
             # Test with time zone support enabled when it's available

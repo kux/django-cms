@@ -17,8 +17,10 @@ def configure(**extra):
         DATABASE_SUPPORTS_TRANSACTIONS = True,
         DATABASES = {
             'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': ':memory:',
+                'ENGINE': 'django.db.backends.mysql',
+                'NAME': 'cms',
+                'USER': 'root',
+                'PASSWORD': 'root'
             }
         },
         SITE_ID = 1,
