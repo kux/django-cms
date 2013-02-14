@@ -91,7 +91,7 @@ class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
         while not status_codes.empty():
             self.assertEquals(status_codes.get(), 200)
 
-    def test_concurrently_move_pages(self):
+    def test_concurrently_move_pages_at_root_level(self):
         superuser = self.get_superuser()
         with self.login_user_context(superuser):
             page_count = 10
@@ -103,6 +103,20 @@ class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
             # commit any pending transaction so we make sure we see an up to date state of the db
             transaction.commit()
             self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), page_count)
+
+    def test_concurrently_move_pages_as_children(self):
+        superuser = self.get_superuser()
+        with self.login_user_context(superuser):
+            page_count = 30
+            self._add_pages(page_count)
+            transaction.commit()
+            self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), page_count)
+            import random
+            movements = [(page_id,
+                          20 if page_id % 2 == 0 else random.randint(1, page_id - 1),
+                          'last-child' if page_id %2 == 0 else 'first-child')
+                         for page_id in xrange(2, 18)]
+            self._concurrently_move_pages(movements)
 
 
 class PagesTestCase(CMSTestCase):

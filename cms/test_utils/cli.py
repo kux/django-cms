@@ -20,7 +20,8 @@ def configure(**extra):
                 'ENGINE': 'django.db.backends.mysql',
                 'NAME': 'cms',
                 'USER': 'root',
-                'PASSWORD': 'root'
+                'PASSWORD': 'root',
+                'HOST': '127.0.0.1'
             }
         },
         SITE_ID = 1,
