@@ -5,12 +5,13 @@ from cms.admin.dialog.forms import (ModeratorForm, PermissionForm,
     PermissionAndModeratorForm)
 from cms.admin.dialog.views import _form_class_selector
 from cms.admin.forms import PageForm
-from cms.admin.pageadmin import contribute_fieldsets, contribute_list_filter
+from cms.admin.pageadmin import contribute_fieldsets, contribute_list_filter, PageAdmin
+from cms.admin.permissionadmin import PagePermissionInlineAdmin
 from cms.api import create_page, create_title, add_plugin
 from cms.apphook_pool import apphook_pool, ApphookPool
 from cms.models.moderatormodels import PageModeratorState
 from cms.models.pagemodel import Page
-from cms.models.permissionmodels import GlobalPagePermission
+from cms.models.permissionmodels import GlobalPagePermission, PagePermission
 from cms.models.placeholdermodel import Placeholder
 from cms.models.titlemodels import Title
 from cms.plugins.text.models import Text
@@ -869,7 +870,18 @@ class PluginPermissionTests(AdminTestsBase):
     def _give_permission(self, user, model, permission_type, save=True):
         codename = '%s_%s' % (permission_type, model._meta.object_name.lower())
         user.user_permissions.add(Permission.objects.get(codename=codename))
-    
+
+    def _give_page_permssion_rights(self, user):
+        self._give_permission(user, PagePermission, 'add')
+        self._give_permission(user, PagePermission, 'change')
+        self._give_permission(user, PagePermission, 'delete')
+
+    def _get_change_page_request(self, user, page):
+        return type('Request', (object,), {
+                'user': user,
+                'path': base.URL_CMS_PAGE_CHANGE % page.pk
+                })
+
     def _give_cms_permissions(self, user, save=True):
         for perm_type in ['add', 'change', 'delete']:
             for model in [Page, Title]:
@@ -973,6 +985,35 @@ class PluginPermissionTests(AdminTestsBase):
         response = client.post(url, data)
         self.assertEqual(response.status_code, HttpResponse.status_code)
 
+    def test_page_permission_inline_visibility(self):
+        user =User(username='user', email='user@domain.com', password='user',
+                   is_staff=True)
+        user.save()
+        self._give_page_permssion_rights(user)
+        page = create_page('A', 'nav_playground.html', 'en')
+        page_permission = PagePermission.objects.create(
+            can_change_permissions=True, user=user, page=page)
+        request = self._get_change_page_request(user, page)
+        page_admin = PageAdmin(Page, None)
+        page_admin._current_page = page
+        # user has can_change_permission 
+        # => must see the PagePermissionInline
+        self.assertTrue(
+            any(type(inline) is PagePermissionInlineAdmin
+                for inline in page_admin.get_inline_instances(request)))
+
+        page = Page.objects.get(pk=page.pk)
+        # remove can_change_permission
+        page_permission.can_change_permissions = False
+        page_permission.save()
+        request = self._get_change_page_request(user, page)
+        page_admin = PageAdmin(Page, None)
+        page_admin._current_page = page
+        # => PagePermissionInline is no longer visible
+        self.assertFalse(
+            any(type(inline) is PagePermissionInlineAdmin
+                for inline in page_admin.get_inline_instances(request)))
+
 
 class AdminFormsTests(AdminTestsBase):
     def test_clean_overwrite_url(self):
@@ -1000,6 +1041,26 @@ class AdminFormsTests(AdminTestsBase):
             Title.objects.set_or_create(request, instance, form, 'en')
             form = PageForm(data, instance=instance)
             self.assertTrue(form.is_valid(), form.errors.as_text())
+
+    def test_missmatching_site_parent_dotsite(self):
+        site0 = Site.objects.create(domain='foo.com', name='foo.com')
+        site1 = Site.objects.create(domain='foo.com', name='foo.com')
+        parent_page = Page.objects.create(
+            template='nav_playground.html',
+            site=site0)
+        new_page_data = {
+            'title': 'Title',
+            'slug': 'slug',
+            'language': 'en',
+            'site': site1.pk,
+            'template': settings.CMS_TEMPLATES[0][0],
+            'reverse_id': '',
+            'parent': parent_page.pk,
+        }
+        form = PageForm(data=new_page_data, files=None)
+        self.assertFalse(form.is_valid())
+        self.assertIn(u"Site doesn't match the parent's page site",
+                      form.errors['__all__'])
 
     def test_reverse_id_error_location(self):
         ''' Test moving the reverse_id validation error to a field specific one '''
