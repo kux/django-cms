@@ -159,7 +159,6 @@ class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
             #     [(4, 9, 'last-child')],
             #     [])
             page_states = [(p.id, p.tree_id, p.lft, p.rght) for p in Page.objects.all()]
-            import ipdb; ipdb.set_trace()
             Page._tree_manager.rebuild()
             page_states_after_rebuild = [(p.id, p.tree_id, p.lft, p.rght)
                                          for p in Page.objects.all()]
