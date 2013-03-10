@@ -11,7 +11,8 @@ from cms.plugins.text.models import Text
 from cms.sitemaps import CMSSitemap
 from cms.templatetags.cms_tags import get_placeholder_content
 from cms.test_utils.testcases import (CMSTestCase, URL_CMS_PAGE,
-                                      URL_CMS_PAGE_ADD, TestHelper)
+                                      URL_CMS_PAGE_ADD, TestHelper,
+                                      URL_CMS_PAGE_DELETE)
 from cms.test_utils.util.context_managers import (LanguageOverride,
                                                   SettingsOverride)
 from cms.utils.page_resolver import get_page_from_request
@@ -35,6 +36,34 @@ import Queue
 from cms.utils.page import is_valid_page_slug
 
 
+class PageMove(threading.Thread):
+
+    def __init__(self, client, status_codes, page_id, target_id, position):
+        super(PageMove, self).__init__()
+        self.client = client
+        self.status_codes = status_codes
+        self.page_id = page_id
+        self.target_id = target_id
+        self.position = position
+
+    def run(self):
+        response = self.client.post("/admin/cms/page/%s/move-page/" % self.page_id, {"target": self.target_id, "position": self.position})
+        self.status_codes.put(response.status_code)
+
+
+class PageDelete(threading.Thread):
+
+    def __init__(self, client, status_codes, page_id):
+        super(PageDelete, self).__init__()
+        self.client = client
+        self.status_codes = status_codes
+        self.page_id = page_id
+
+    def run(self):
+        response = self.client.post(URL_CMS_PAGE_DELETE % self.page_id, {'post': 'yes'})
+        self.status_codes.put(response.status_code)
+
+    
 class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
 
     def _add_page(self):
@@ -71,18 +100,12 @@ class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
             transaction.commit()
             # all previous created pages need to have different tree_ids
             self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), num_concurrent_req + 1)
-    
     def _concurrently_move_pages(self, movements):
         status_codes = Queue.Queue()
-
-        class PageMove(threading.Thread):
-            def run(self_):
-                response = self.client.post("/admin/cms/page/%s/move-page/" % page_id, {"target": target_id, "position": position})
-                status_codes.put(response.status_code)
-
         threads = []
         for page_id, target_id, position in movements:
-            page_moving_thread = PageMove()
+            page_moving_thread = PageMove(self.client, status_codes,
+                                          page_id, target_id, position)
             page_moving_thread.start()
             threads.append(page_moving_thread)
         for thread in threads:
@@ -103,6 +126,44 @@ class ConcurrentPageChangesTestCase(testcases.TransactionTestCase, TestHelper):
             # commit any pending transaction so we make sure we see an up to date state of the db
             transaction.commit()
             self.assertEqual(len(set(p.tree_id for p in Page.objects.all())), page_count)
+
+    def _concurrently_move_and_delete_pages(self, movements, pages_to_delete):
+        status_codes = Queue.Queue()
+        threads = []
+        for page_id in pages_to_delete:
+            page_deleting_thread = PageDelete(self.client, status_codes, 
+                                              page_id)
+            page_deleting_thread.start()
+            threads.append(page_deleting_thread)
+        for page_id, target_id, position in movements:
+            page_moving_thread = PageMove(self.client, status_codes,
+                                          page_id, target_id, position)
+            page_moving_thread.start()
+            threads.append(page_moving_thread)
+        for thread in threads:
+            thread.join()
+
+    def test_concurrently_move_and_delete_pages(self):
+        superuser = self.get_superuser()
+        with self.login_user_context(superuser):
+            page_count = 10
+            self._add_pages(page_count)
+
+            movements = [(page_id, 1, 'last-child') for page_id in xrange(2, 11)]
+            self._concurrently_move_pages(movements)
+            self._concurrently_move_and_delete_pages(
+                # [(2, 6, 'last-child')],
+                [],
+                [3, 4])
+            # self._concurrently_move_and_delete_pages(
+            #     [(4, 9, 'last-child')],
+            #     [])
+            page_states = [(p.id, p.tree_id, p.lft, p.rght) for p in Page.objects.all()]
+            import ipdb; ipdb.set_trace()
+            Page._tree_manager.rebuild()
+            page_states_after_rebuild = [(p.id, p.tree_id, p.lft, p.rght)
+                                         for p in Page.objects.all()]
+            self.assertListEqual(page_states, page_states_after_rebuild)
 
     def test_concurrently_move_pages_as_children(self):
         superuser = self.get_superuser()
@@ -200,6 +261,7 @@ class PagesTestCase(CMSTestCase):
             page1 = create_page('test page 1', 'nav_playground.html', 'en',
                                 published=True)
             page1_1 = create_page('test page 1_1', 'nav_playground.html', 'en',
+
                                   published=True, parent=page1, slug="foo")
             page2 = create_page('test page 1_1', 'nav_playground.html', 'en',
                                   published=True, slug="foo")
